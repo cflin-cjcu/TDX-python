@@ -21,41 +21,65 @@ def fetch_api_data(headers):
         # 使用 headers 訪問 API
         API_URL = "https://tdx.transportdata.tw/api/basic/v2/Rail/TRA/LiveTrainDelay?$top=30&$format=JSON"
         api_response = requests.get(API_URL, headers=headers)
+        api_response.raise_for_status()  # 檢查 HTTP 狀態碼
         return api_response.json()
-
-    
+    except requests.exceptions.HTTPError as http_err:
+        print(f"HTTP error occurred: {http_err}")
+    except requests.exceptions.RequestException as req_err:
+        print(f"Request error occurred: {req_err}")
+    except ValueError as json_err:
+        print(f"JSON decode error: {json_err}")
     except Exception as e:
-        print(f"錯誤: {e}")
-        return []
+        print(f"An error occurred: {e}")
+    return []
+
 
 # 獲取帶有 token 的 headers
 headers = get_api_token(APP_ID, APP_KEY, AUTH_URL)
 print("成功獲取 token")
 print("Headers:", headers)
 
-# 建立 Dash 應用程式
+# 初始化 Dash 應用程式
 app = Dash(__name__)
-
 app.layout = html.Div([
-    dcc.Graph(id='live-update-graph', style={'height': '80vh'}),
     dcc.Interval(
         id='interval-component',
-        interval=30*1000,  # 30 秒
+        interval=60*1000,  # 每分鐘更新一次
         n_intervals=0
-    )
+    ),
+    html.Div([
+        dcc.Graph(id='bar-chart')
+    ], style={'width': '50%', 'display': 'inline-block'}),
+    html.Div([
+        html.Table(id='delay-table')
+    ], style={'width': '50%', 'display': 'inline-block'})
 ])
 
-@app.callback(Output('live-update-graph', 'figure'),
-              Input('interval-component', 'n_intervals'))
-def update_graph_live(n):
+@app.callback(
+    [Output('bar-chart', 'figure'),
+     Output('delay-table', 'children')],
+    [Input('interval-component', 'n_intervals')]
+)
+def update_layout(n_intervals):
+    # headers = {
+    #     'authorization': f'Bearer {get_api_token(APP_ID, APP_KEY, AUTH_URL)}'
+    # }
+    headers = get_api_token(APP_ID, APP_KEY, AUTH_URL)
     data = fetch_api_data(headers)
+    
+    if not data:
+        return {}, []
+
     df = pd.DataFrame(data)
-    print(df)
-    if not df.empty:
-        df['StationName'] = df['StationName'].apply(lambda x: x['Zh_tw'] if isinstance(x, dict) else x)
-        fig = px.bar(df, x='StationName', y='DelayTime', title='Train Delay Time')
-        return fig
-    return {}
+    df['StationName'] = df['StationName'].apply(lambda x: x['Zh_tw'])
+    fig = px.bar(df, x='StationName', y='DelayTime', title='Train Delays')
+
+    table_header = [
+        html.Thead(html.Tr([html.Th("Station Name"), html.Th("Delay Time")]))
+    ]
+    table_body = [html.Tbody([html.Tr([html.Td(row['StationName']), html.Td(row['DelayTime'])]) for index, row in df.iterrows()])]
+
+    return fig, table_header + table_body
 
 if __name__ == '__main__':
     app.run_server(debug=True)
